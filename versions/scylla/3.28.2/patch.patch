@@ -154,38 +154,6 @@ index a1d4d405..d3ccafd7 100644
 
  log = logging.getLogger(__name__)
 
-@@ -428,6 +429,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
-         self.check_create_statement(tablemeta, create_statement)
-
-     @lessthancass40
-+    @requirescompactstorage
-     def test_compact_storage(self):
-         create_statement = self.make_create_statement(["a"], [], ["b"])
-         create_statement += " WITH COMPACT STORAGE"
-@@ -437,6 +439,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
-         self.check_create_statement(tablemeta, create_statement)
-
-     @lessthancass40
-+    @requirescompactstorage
-     def test_dense_compact_storage(self):
-         create_statement = self.make_create_statement(["a"], ["b"], ["c"])
-         create_statement += " WITH COMPACT STORAGE"
-@@ -456,6 +459,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
-         self.check_create_statement(tablemeta, create_statement)
-
-     @lessthancass40
-+    @requirescompactstorage
-     def test_counter_with_compact_storage(self):
-         """ PYTHON-1100 """
-         create_statement = (
-@@ -468,6 +472,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
-         self.check_create_statement(tablemeta, create_statement)
-
-     @lessthancass40
-+    @requirescompactstorage
-     def test_counter_with_dense_compact_storage(self):
-         create_statement = (
-             "CREATE TABLE {keyspace}.{table} ("
 @@ -2171,7 +2163,7 @@ class MaterializedViewMetadataTestSimple(BasicSharedKeyspaceUnitTestCase):
 
          @test_category metadata
