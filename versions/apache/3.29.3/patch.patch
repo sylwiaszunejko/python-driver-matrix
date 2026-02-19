@@ -1,3 +1,48 @@
+diff --git a/ez_setup.py b/ez_setup.py
+index 76e71057..1c1444b7 100644
+--- a/ez_setup.py
++++ b/ez_setup.py
+@@ -29,7 +29,7 @@ try:
+ except ImportError:
+     USER_SITE = None
+
+-DEFAULT_VERSION = "0.9.6"
++DEFAULT_VERSION = "80.10.2"
+ DEFAULT_URL = "https://pypi.python.org/packages/source/s/setuptools/"
+
+ def _python_cmd(*args):
+@@ -112,7 +112,10 @@ def use_setuptools(version=DEFAULT_VERSION, download_base=DEFAULT_URL,
+     was_imported = 'pkg_resources' in sys.modules or \
+         'setuptools' in sys.modules
+     try:
+-        import pkg_resources
++        import warnings
++        with warnings.catch_warnings():
++            warnings.simplefilter("ignore", UserWarning)
++            import pkg_resources
+     except ImportError:
+         return _do_download(version, download_base, to_dir, download_delay)
+     try:
+diff --git a/requirements.txt b/requirements.txt
+index 1d5f0bcf..0fc5e096 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1 +1,2 @@
+ geomet>=1.1
++setuptools<81.0.0
+diff --git a/setup.py b/setup.py
+index ef735b75..cad57af9 100644
+--- a/setup.py
++++ b/setup.py
+@@ -386,7 +386,7 @@ def run_setup(extensions):
+         else:
+             sys.stderr.write("Bypassing Cython setup requirement\n")
+
+-    dependencies = ['geomet>=1.1']
++    dependencies = ['geomet>=1.1', 'setuptools<82.0.0']
+
+     _EXTRAS_REQUIRE = {
+         'graph': ['gremlinpython==3.4.6'],
 diff --git a/test-requirements.txt b/test-requirements.txt
 index 94ac6117..b73d06bd 100644
 --- a/test-requirements.txt

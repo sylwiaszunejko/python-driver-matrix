@@ -141,7 +141,8 @@ class Run:
 
     @lru_cache(maxsize=None)
     def _create_venv(self):
-        basic_packages = ("pytest==7.4.4",
+        basic_packages = ("setuptools<82.0.0",
+                          "pytest==7.4.4",
                           "https://github.com/scylladb/scylla-ccm/archive/master.zip",
                           "pytest-subtests")
         if self._venv_path.exists() and self._venv_path.is_dir():
@@ -158,7 +159,8 @@ class Run:
             pip_prefix = ""
         self._run_command_in_shell(cmd=venv_cmd)
         logging.info("Installing the following packages:\n%s", "\n".join(basic_packages))
-        self._run_command_in_shell(cmd=f"{self._activate_venv_cmd()} && {pip_prefix}pip install {' '.join(basic_packages)}")
+        packages_quoted = ' '.join(f'"{pkg}"' for pkg in basic_packages)
+        self._run_command_in_shell(cmd=f"{self._activate_venv_cmd()} && {pip_prefix}pip install {packages_quoted}")
 
     @lru_cache(maxsize=None)
     def _activate_venv_cmd(self):
@@ -220,7 +222,7 @@ class Run:
             prefix = ""
             if self._python_driver_type == "scylla":
                 prefix = "uv "
-            self._run_command_in_shell(f"{self._activate_venv_cmd()} && {prefix}pip install -e .")
+            self._run_command_in_shell(f"{self._activate_venv_cmd()} && {prefix}pip install --no-build-isolation -e .")
             debug = '--log-cli-level=debug' if os.environ.get("DEV_MODE") else ''
             if self._python_driver_type == "scylla":
                 prefix = "uv run "
