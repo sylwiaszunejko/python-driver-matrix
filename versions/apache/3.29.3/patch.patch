@@ -58,9 +58,9 @@ index 76e71057..f9528661 100644
 +    except PackageNotFoundError:
          return _do_download(version, download_base, to_dir,
                              download_delay)
-
+ 
 diff --git a/test-requirements.txt b/test-requirements.txt
-index 94ac6117..b73d06bd 100644
+index 513451b4..baba2b1a 100644
 --- a/test-requirements.txt
 +++ b/test-requirements.txt
 @@ -1,7 +1,7 @@
@@ -73,10 +73,11 @@ index 94ac6117..b73d06bd 100644
  pure-sasl
  twisted[tls]
 diff --git a/tests/integration/__init__.py b/tests/integration/__init__.py
-index e389742b..156b65f3 100644
+index 4185f527..f67a2bbe 100644
 --- a/tests/integration/__init__.py
 +++ b/tests/integration/__init__.py
-@@ -41,8 +41,8 @@ from cassandra import ProtocolVersion
+@@ -40,8 +40,8 @@ from cassandra import ProtocolVersion
+ 
  try:
      from ccmlib.dse_cluster import DseCluster
 -    from ccmlib.hcd_cluster import HcdCluster
@@ -85,11 +86,10 @@ index e389742b..156b65f3 100644
      from ccmlib.cluster_factory import ClusterFactory as CCMClusterFactory
      from ccmlib import common
  except ImportError as e:
-     CCMClusterFactory = None
-@@ -172,21 +172,26 @@ KEEP_TEST_CLUSTER = bool(os.getenv('KEEP_TEST_CLUSTER', False))
+@@ -171,9 +171,10 @@ KEEP_TEST_CLUSTER = bool(os.getenv('KEEP_TEST_CLUSTER', False))
  SIMULACRON_JAR = os.getenv('SIMULACRON_JAR', None)
  CLOUD_PROXY_PATH = os.getenv('CLOUD_PROXY_PATH', None)
-
+ 
 -# Supported Clusters: Cassandra, DDAC, DSE, HCD
 +# Supported Clusters: Cassandra, DDAC, DSE, HCD, Scylla
  DSE_VERSION = None
@@ -98,10 +98,7 @@ index e389742b..156b65f3 100644
  if os.getenv('DSE_VERSION', None):  # we are testing against DSE
      DSE_VERSION = Version(os.getenv('DSE_VERSION', None))
      DSE_CRED = os.getenv('DSE_CREDS', None)
-     CASSANDRA_VERSION = _get_cass_version_from_dse(DSE_VERSION.base_version)
-     CCM_VERSION = DSE_VERSION.base_version
- elif os.getenv('HCD_VERSION', None):  # we are testing against HCD
-     HCD_VERSION = Version(os.getenv('HCD_VERSION', None))
+@@ -184,8 +185,12 @@ elif os.getenv('HCD_VERSION', None):  # we are testing against HCD
      CASSANDRA_VERSION = _get_cass_version_from_hcd(HCD_VERSION.base_version)
      CCM_VERSION = HCD_VERSION.base_version
  else:  # we are testing against Cassandra or DDAC
@@ -116,7 +113,7 @@ index e389742b..156b65f3 100644
      try:
          cassandra_version = Version(cv_string)  # env var is set to test-dse for DDAC
      except:
-@@ -212,6 +218,8 @@ if DSE_VERSION:
+@@ -212,6 +217,8 @@ elif HCD_VERSION:
  elif CASSANDRA_DIR:
      log.info("Using Cassandra dir: %s", CASSANDRA_DIR)
      CCM_KWARGS['install_dir'] = CASSANDRA_DIR
@@ -125,7 +122,7 @@ index e389742b..156b65f3 100644
  else:
      log.info('Using Cassandra version: %s', CCM_VERSION)
      CCM_KWARGS['version'] = CCM_VERSION
-@@ -455,7 +463,7 @@ def is_current_cluster(cluster_name, node_counts, workloads):
+@@ -455,7 +462,7 @@ def is_current_cluster(cluster_name, node_counts, workloads):
          if [len(list(nodes)) for dc, nodes in
                  groupby(CCM_CLUSTER.nodelist(), lambda n: n.data_center)] == node_counts:
              for node in CCM_CLUSTER.nodelist():
@@ -134,7 +131,9 @@ index e389742b..156b65f3 100644
                      print("node workloads don't match creating new cluster")
                      return False
              return True
-@@ -592,6 +600,11 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None,
+@@ -590,9 +597,14 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None,
+                 CCM_CLUSTER.set_configuration_options(configuration_options)
+                 CCM_CLUSTER.populate(nodes, ipformat=ipformat, use_single_interface=use_single_interface)
              else:
 -                ccm_cluster_clz = CCMCluster if Version(cassandra_version) < Version('4.1') else Cassandra41CCMCluster
 -                CCM_CLUSTER = ccm_cluster_clz(path, cluster_name, **ccm_options)
@@ -149,8 +148,9 @@ index e389742b..156b65f3 100644
 +                    CCM_CLUSTER.set_configuration_options({'start_native_transport': True})
                  if Version(cassandra_version) >= Version('2.2'):
                      CCM_CLUSTER.set_configuration_options({'enable_user_defined_functions': True})
-@@ -609,18 +622,22 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None,
-
+                     if Version(cassandra_version) >= Version('3.0'):
+@@ -609,18 +621,22 @@ def use_cluster(cluster_name, nodes, ipformat=None, start=True, workloads=None,
+ 
                  common.switch_cluster(path, cluster_name)
                  CCM_CLUSTER.set_configuration_options(configuration_options)
 -                CCM_CLUSTER.populate(nodes, ipformat=ipformat, use_single_interface=use_single_interface)
@@ -158,12 +158,12 @@ index e389742b..156b65f3 100644
 +                    CCM_CLUSTER.populate(nodes, ipformat=ipformat)
 +                else:
 +                    CCM_CLUSTER.populate(nodes, ipformat=ipformat, use_single_interface=use_single_interface)
-
+ 
      try:
          jvm_args = []
-
+ 
          # This will enable the Mirroring query handler which will echo our custom payload k,v pairs back
-
+ 
 -        if 'graph' in workloads:
 -            jvm_args += ['-Xms1500M', '-Xmx1500M']
 -        else:
@@ -178,22 +178,52 @@ index e389742b..156b65f3 100644
          if len(workloads) > 0:
              for node in CCM_CLUSTER.nodes.values():
                  node.set_workloads(workloads)
+@@ -758,17 +774,17 @@ def setup_keyspace(ipformat=None, wait=True, protocol_version=None, port=9042):
+ 
+         ddl = '''
+             CREATE KEYSPACE test3rf
+-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '3'}'''
++            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '3'}'''
+         execute_with_long_wait_retry(session, ddl)
+ 
+         ddl = '''
+             CREATE KEYSPACE test2rf
+-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '2'}'''
++            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '2'}'''
+         execute_with_long_wait_retry(session, ddl)
+ 
+         ddl = '''
+             CREATE KEYSPACE test1rf
+-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}'''
++            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}'''
+         execute_with_long_wait_retry(session, ddl)
+ 
+         ddl_3f = '''
+@@ -837,7 +853,7 @@ class BasicKeyspaceUnitTestCase(unittest.TestCase):
+ 
+     @classmethod
+     def create_keyspace(cls, rf):
+-        ddl = "CREATE KEYSPACE {0} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': '{1}'}}".format(cls.ks_name, rf)
++        ddl = "CREATE KEYSPACE {0} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': '{1}'}}".format(cls.ks_name, rf)
+         execute_with_long_wait_retry(cls.session, ddl)
+ 
+     @classmethod
 diff --git a/tests/integration/conftest.py b/tests/integration/conftest.py
-index b2eb9a02..7a00d6b1 100644
+index e17ac302..5c257531 100644
 --- a/tests/integration/conftest.py
 +++ b/tests/integration/conftest.py
 @@ -1,10 +1,25 @@
 +import os
 +import logging
  import pytest
-
+ 
 +from ccmlib.cluster_factory import ClusterFactory as CCMClusterFactory
 +
 +from . import CLUSTER_NAME, SINGLE_NODE_CLUSTER_NAME, MULTIDC_CLUSTER_NAME
 +from . import path as ccm_path
  from tests.integration import teardown_package
-
-
+ 
+ 
 -@pytest.fixture(scope='session', autouse=True)
 -def setup_and_teardown_packages():
 -    print('setup')
@@ -211,12 +241,46 @@ index b2eb9a02..7a00d6b1 100644
 +                cluster.clear()
 +            except FileNotFoundError:
 +                pass
+diff --git a/tests/integration/standard/column_encryption/test_policies.py b/tests/integration/standard/column_encryption/test_policies.py
+index 325c19cf..f4789ca1 100644
+--- a/tests/integration/standard/column_encryption/test_policies.py
++++ b/tests/integration/standard/column_encryption/test_policies.py
+@@ -31,7 +31,7 @@ class ColumnEncryptionPolicyTest(unittest.TestCase):
+ 
+     def _recreate_keyspace(self, session):
+         session.execute("drop keyspace if exists foo")
+-        session.execute("CREATE KEYSPACE foo WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}")
++        session.execute("CREATE KEYSPACE foo WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}")
+         session.execute("CREATE TABLE foo.bar(encrypted blob, unencrypted int, primary key(unencrypted))")
+ 
+     def _create_policy(self, key, iv = None):
+diff --git a/tests/integration/standard/test_authentication.py b/tests/integration/standard/test_authentication.py
+index 94f77a69..08b51c1f 100644
+--- a/tests/integration/standard/test_authentication.py
++++ b/tests/integration/standard/test_authentication.py
+@@ -12,6 +12,8 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
++import os
++
+ from packaging.version import Version
+ import logging
+ import time
+@@ -33,6 +35,7 @@ log = logging.getLogger(__name__)
+ 
+ 
+ def setup_module():
++    os.environ['SCYLLA_EXT_OPTS'] = '--auth-superuser-name=cassandra --auth-superuser-salted-password=$6$x7IFjiX5VCpvNiFk$2IfjTvSyGL7zerpV.wbY7mJjaRCrJ/68dtT3UpT.sSmNYz1bPjtn3mH.kJKFvaZ2T4SbVeBijjmwGjcb83LlV/'
+     if CASSANDRA_IP.startswith("127.0.0.") and not USE_CASS_EXTERNAL:
+         use_singledc(start=False)
+         ccm_cluster = get_cluster()
 diff --git a/tests/integration/standard/test_authentication_misconfiguration.py b/tests/integration/standard/test_authentication_misconfiguration.py
 index 546141d8..a8cb9396 100644
 --- a/tests/integration/standard/test_authentication_misconfiguration.py
 +++ b/tests/integration/standard/test_authentication_misconfiguration.py
 @@ -19,6 +19,12 @@ from tests.integration import USE_CASS_EXTERNAL, use_cluster, TestCluster
-
+ 
  class MisconfiguredAuthenticationTests(unittest.TestCase):
      """ One node (not the contact point) has password auth. The rest of the nodes have no auth """
 +    # TODO: 	Fix ccm to apply following options to scylla.yaml
@@ -228,6 +292,86 @@ index 546141d8..a8cb9396 100644
      @classmethod
      def setUpClass(cls):
          if not USE_CASS_EXTERNAL:
+diff --git a/tests/integration/standard/test_cluster.py b/tests/integration/standard/test_cluster.py
+index 4c286426..07f459c3 100644
+--- a/tests/integration/standard/test_cluster.py
++++ b/tests/integration/standard/test_cluster.py
+@@ -163,7 +163,7 @@ class ClusterTests(unittest.TestCase):
+         result = execute_until_pass(session,
+             """
+             CREATE KEYSPACE clustertests
+-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
++            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
+             """)
+         self.assertFalse(result)
+ 
+@@ -1150,6 +1150,7 @@ class ClusterTests(unittest.TestCase):
+ 
+         @test_category metadata
+         """
++        ks_name = 'test_replicas_queried_ks'
+         queried_hosts = set()
+         tap_profile = ExecutionProfile(
+             load_balancing_policy=TokenAwarePolicy(RoundRobinPolicy())
+@@ -1157,14 +1158,14 @@ class ClusterTests(unittest.TestCase):
+         with TestCluster(execution_profiles={EXEC_PROFILE_DEFAULT: tap_profile}) as cluster:
+             session = cluster.connect(wait_for_all_pools=True)
+             session.execute('''
+-                    CREATE TABLE test1rf.table_with_big_key (
++                    CREATE TABLE {}.table_with_big_key (
+                         k1 int,
+                         k2 int,
+                         k3 int,
+                         k4 int,
+-                        PRIMARY KEY((k1, k2, k3), k4))''')
+-            prepared = session.prepare("""SELECT * from test1rf.table_with_big_key
+-                                          WHERE k1 = ? AND k2 = ? AND k3 = ? AND k4 = ?""")
++                        PRIMARY KEY((k1, k2, k3), k4))'''.format(ks_name))
++            prepared = session.prepare("""SELECT * from {}.table_with_big_key
++                                          WHERE k1 = ? AND k2 = ? AND k3 = ? AND k4 = ?""".format(ks_name))
+             for i in range(10):
+                 result = session.execute(prepared, (i, i, i, i), trace=True)
+                 trace = result.response_future.get_query_trace(query_cl=ConsistencyLevel.ALL)
+@@ -1183,14 +1184,14 @@ class ClusterTests(unittest.TestCase):
+                          execution_profiles={EXEC_PROFILE_DEFAULT: hfp_profile}) as cluster:
+ 
+             session = cluster.connect(wait_for_all_pools=True)
+-            prepared = session.prepare("""SELECT * from test1rf.table_with_big_key
+-                                          WHERE k1 = ? AND k2 = ? AND k3 = ? AND k4 = ?""")
++            prepared = session.prepare("""SELECT * from {}.table_with_big_key
++                                          WHERE k1 = ? AND k2 = ? AND k3 = ? AND k4 = ?""".format(ks_name))
+             for _ in range(10):
+                 result = session.execute(prepared, (last_i, last_i, last_i, last_i), trace=True)
+                 trace = result.response_future.get_query_trace(query_cl=ConsistencyLevel.ALL)
+                 self._assert_replica_queried(trace, only_replicas=False)
+ 
+-            session.execute('''DROP TABLE test1rf.table_with_big_key''')
++            session.execute('''DROP TABLE {}.table_with_big_key'''.format(ks_name))
+ 
+     @unittest.skip
+     @greaterthanorequalcass30
+@@ -1459,7 +1460,7 @@ class DontPrepareOnIgnoredHostsTest(unittest.TestCase):
+         hosts = cluster.metadata.all_hosts()
+         session.execute("CREATE KEYSPACE clustertests "
+                         "WITH replication = "
+-                        "{'class': 'SimpleStrategy', 'replication_factor': '1'}")
++                        "{'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}")
+         session.execute("CREATE TABLE clustertests.tab (a text, PRIMARY KEY (a))")
+         # assign to an unused variable so cluster._prepared_statements retains
+         # reference
+diff --git a/tests/integration/standard/test_control_connection.py b/tests/integration/standard/test_control_connection.py
+index 9d579476..5680c9da 100644
+--- a/tests/integration/standard/test_control_connection.py
++++ b/tests/integration/standard/test_control_connection.py
+@@ -64,7 +64,7 @@ class ControlConnectionTests(unittest.TestCase):
+         self.session = self.cluster.connect()
+         self.session.execute("""
+             CREATE KEYSPACE keyspacetodrop
+-            WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1' }
++            WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1' }
+             """)
+         self.session.set_keyspace("keyspacetodrop")
+         self.session.execute("CREATE TYPE user (age int, name text)")
 diff --git a/tests/integration/standard/test_custom_cluster.py b/tests/integration/standard/test_custom_cluster.py
 index d0f10d51..d8353ec3 100644
 --- a/tests/integration/standard/test_custom_cluster.py
@@ -241,12 +385,142 @@ index d0f10d51..d8353ec3 100644
      # wait until all nodes are up
      wait_until_not_raised(lambda: TestCluster(contact_points=['127.0.0.1'], port=9046).connect().shutdown(), 1, 20)
      wait_until_not_raised(lambda: TestCluster(contact_points=['127.0.0.2'], port=9046).connect().shutdown(), 1, 20)
+diff --git a/tests/integration/standard/test_custom_protocol_handler.py b/tests/integration/standard/test_custom_protocol_handler.py
+index 68ef2407..694d6ef5 100644
+--- a/tests/integration/standard/test_custom_protocol_handler.py
++++ b/tests/integration/standard/test_custom_protocol_handler.py
+@@ -41,7 +41,7 @@ class CustomProtocolHandlerTest(unittest.TestCase):
+     def setUpClass(cls):
+         cls.cluster = TestCluster()
+         cls.session = cls.cluster.connect()
+-        cls.session.execute("CREATE KEYSPACE custserdes WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1'}")
++        cls.session.execute("CREATE KEYSPACE custserdes WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1'}")
+         cls.session.set_keyspace("custserdes")
+ 
+     @classmethod
+diff --git a/tests/integration/standard/test_cython_protocol_handlers.py b/tests/integration/standard/test_cython_protocol_handlers.py
+index 83d39407..6a9b4dc1 100644
+--- a/tests/integration/standard/test_cython_protocol_handlers.py
++++ b/tests/integration/standard/test_cython_protocol_handlers.py
+@@ -34,7 +34,7 @@ class CythonProtocolHandlerTest(unittest.TestCase):
+         cls.cluster = TestCluster()
+         cls.session = cls.cluster.connect()
+         cls.session.execute("CREATE KEYSPACE testspace WITH replication = "
+-                            "{ 'class' : 'SimpleStrategy', 'replication_factor': '1'}")
++                            "{ 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1'}")
+         cls.session.set_keyspace("testspace")
+         cls.colnames = create_table_with_all_types("test_table", cls.session, cls.N_ITEMS)
+ 
+diff --git a/tests/integration/standard/test_dse.py b/tests/integration/standard/test_dse.py
+index 7b96094b..0ce53561 100644
+--- a/tests/integration/standard/test_dse.py
++++ b/tests/integration/standard/test_dse.py
+@@ -62,7 +62,7 @@ class DseCCMClusterTest(unittest.TestCase):
+             session,
+             """
+             CREATE KEYSPACE clustertests
+-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
++            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
+             """)
+         self.assertFalse(result)
+ 
 diff --git a/tests/integration/standard/test_metadata.py b/tests/integration/standard/test_metadata.py
-index 3534f29f..96977d40 100644
+index 573fc99d..7057c212 100644
 --- a/tests/integration/standard/test_metadata.py
 +++ b/tests/integration/standard/test_metadata.py
-@@ -2078,12 +2078,9 @@ class MaterializedViewMetadataTestSimple(BasicSharedKeyspaceUnitTestCase):
-
+@@ -215,8 +215,8 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
+ 
+         self.assertEqual(ksmeta.name, self.keyspace_name)
+         self.assertTrue(ksmeta.durable_writes)
+-        self.assertEqual(ksmeta.replication_strategy.name, 'SimpleStrategy')
+-        self.assertEqual(ksmeta.replication_strategy.replication_factor, 1)
++        self.assertEqual(ksmeta.replication_strategy.name, 'NetworkTopologyStrategy')
++        self.assertEqual(ksmeta.replication_strategy.dc_replication_factors["dc1"], 1)
+ 
+         self.assertTrue(self.function_table_name in ksmeta.tables)
+         tablemeta = ksmeta.tables[self.function_table_name]
+@@ -577,7 +577,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
+         self.assertNotIn("new_keyspace", cluster2.metadata.keyspaces)
+ 
+         # Cluster metadata modification
+-        self.session.execute("CREATE KEYSPACE new_keyspace WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}")
++        self.session.execute("CREATE KEYSPACE new_keyspace WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}")
+         self.assertNotIn("new_keyspace", cluster2.metadata.keyspaces)
+ 
+         cluster2.refresh_schema_metadata()
+@@ -1098,7 +1098,7 @@ class TestCodeCoverage(unittest.TestCase):
+ 
+         session.execute("""
+             CREATE KEYSPACE export_udts
+-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
++            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
+             AND durable_writes = true;
+         """)
+         session.execute("""
+@@ -1122,7 +1122,7 @@ class TestCodeCoverage(unittest.TestCase):
+             addresses map<text, frozen<address>>)
+         """)
+ 
+-        expected_prefix = """CREATE KEYSPACE export_udts WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}  AND durable_writes = true;
++        expected_prefix = """CREATE KEYSPACE export_udts WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}  AND durable_writes = true;
+ 
+ CREATE TYPE export_udts.street (
+     street_number int,
+@@ -1170,7 +1170,7 @@ CREATE TABLE export_udts.users (
+         session.execute("DROP KEYSPACE IF EXISTS {0}".format(ksname))
+         session.execute("""
+             CREATE KEYSPACE "%s"
+-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
++            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
+             """ % (ksname,))
+         session.execute("""
+             CREATE TABLE "%s"."%s" (
+@@ -1214,7 +1214,7 @@ CREATE TABLE export_udts.users (
+ 
+         ddl = '''
+             CREATE KEYSPACE %s
+-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '3'}'''
++            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '3'}'''
+         self.assertRaises(AlreadyExists, session.execute, ddl % ksname)
+ 
+         ddl = '''
+@@ -1289,7 +1289,7 @@ class KeyspaceAlterMetadata(unittest.TestCase):
+         self.session = self.cluster.connect()
+         name = self._testMethodName.lower()
+         crt_ks = '''
+-                CREATE KEYSPACE %s WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1} AND durable_writes = true''' % name
++                CREATE KEYSPACE %s WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND durable_writes = true''' % name
+         self.session.execute(crt_ks)
+ 
+     def tearDown(self):
+@@ -1339,7 +1339,7 @@ class IndexMapTests(unittest.TestCase):
+             cls.session.execute(
+                 """
+                 CREATE KEYSPACE %s
+-                WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'};
++                WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'};
+                 """ % cls.keyspace_name)
+             cls.session.set_keyspace(cls.keyspace_name)
+         except Exception:
+@@ -1442,7 +1442,7 @@ class FunctionTest(unittest.TestCase):
+             cls.cluster = TestCluster()
+             cls.keyspace_name = cls.__name__.lower()
+             cls.session = cls.cluster.connect()
+-            cls.session.execute("CREATE KEYSPACE IF NOT EXISTS %s WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}" % cls.keyspace_name)
++            cls.session.execute("CREATE KEYSPACE IF NOT EXISTS %s WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}" % cls.keyspace_name)
+             cls.session.set_keyspace(cls.keyspace_name)
+             cls.keyspace_function_meta = cls.cluster.metadata.keyspaces[cls.keyspace_name].functions
+             cls.keyspace_aggregate_meta = cls.cluster.metadata.keyspaces[cls.keyspace_name].aggregates
+@@ -1908,7 +1908,7 @@ class BadMetaTest(unittest.TestCase):
+         cls.cluster = TestCluster()
+         cls.keyspace_name = cls.__name__.lower()
+         cls.session = cls.cluster.connect()
+-        cls.session.execute("CREATE KEYSPACE %s WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}" % cls.keyspace_name)
++        cls.session.execute("CREATE KEYSPACE %s WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}" % cls.keyspace_name)
+         cls.session.set_keyspace(cls.keyspace_name)
+         connection = cls.cluster.control_connection._connection
+ 
+@@ -2079,10 +2079,7 @@ class MaterializedViewMetadataTestSimple(BasicSharedKeyspaceUnitTestCase):
          @test_category metadata
          """
          compaction = self.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views["mv1"].options["compaction"]["class"]
@@ -255,14 +529,22 @@ index 3534f29f..96977d40 100644
 -        else:
 -            self.assertIn("SizeTieredCompactionStrategy", compaction)
 +        self.assertIn(compaction, ["SizeTieredCompactionStrategy", "IncrementalCompactionStrategy"])
-
+ 
          self.session.execute("ALTER MATERIALIZED VIEW {0}.mv1 WITH compaction = {{ 'class' : 'LeveledCompactionStrategy' }}".format(self.keyspace_name))
          compaction = self.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views["mv1"].options["compaction"]["class"]
-         self.assertIn("LeveledCompactionStrategy", compaction)
 diff --git a/tests/integration/standard/test_prepared_statements.py b/tests/integration/standard/test_prepared_statements.py
-index a643b19c..bbde2aff 100644
+index c25f8b90..5900a008 100644
 --- a/tests/integration/standard/test_prepared_statements.py
 +++ b/tests/integration/standard/test_prepared_statements.py
+@@ -61,7 +61,7 @@ class PreparedStatementTests(unittest.TestCase):
+         self.session.execute(
+             """
+             CREATE KEYSPACE preparedtests
+-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
++            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
+             """)
+ 
+         self.session.set_keyspace("preparedtests")
 @@ -168,7 +168,7 @@ class PreparedStatementTests(unittest.TestCase):
      def _run_too_many_bind_values(self, session):
          statement_to_prepare = """ INSERT INTO test3rf.test (v) VALUES  (?)"""
@@ -272,25 +554,80 @@ index a643b19c..bbde2aff 100644
              self.assertRaises(InvalidRequest, session.prepare, statement_to_prepare)
          else:
              prepared = session.prepare(statement_to_prepare)
-diff --git a/tests/integration/standard/test_authentication.py b/tests/integration/standard/test_authentication.py
-index eb8019bf..02089094 100644
---- a/tests/integration/standard/test_authentication.py
-+++ b/tests/integration/standard/test_authentication.py
-@@ -12,6 +12,8 @@
- # See the License for the specific language governing permissions and
- # limitations under the License.
-
-+import os
-+
- from packaging.version import Version
- import logging
- import time
-@@ -34,6 +36,7 @@ log = logging.getLogger(__name__)
-
-
- def setup_module():
-+    os.environ['SCYLLA_EXT_OPTS'] = '--auth-superuser-name=cassandra --auth-superuser-salted-password=$6$x7IFjiX5VCpvNiFk$2IfjTvSyGL7zerpV.wbY7mJjaRCrJ/68dtT3UpT.sSmNYz1bPjtn3mH.kJKFvaZ2T4SbVeBijjmwGjcb83LlV/'
-     if CASSANDRA_IP.startswith("127.0.0.") and not USE_CASS_EXTERNAL:
-         use_singledc(start=False)
-         ccm_cluster = get_cluster()
-
+@@ -403,7 +403,7 @@ class PreparedStatementTests(unittest.TestCase):
+         keyspace = "test_fail_if_different_query_id_on_reprepare"
+         self.session.execute(
+             "CREATE KEYSPACE IF NOT EXISTS {} WITH replication = "
+-            "{{'class': 'SimpleStrategy', 'replication_factor': 1}}".format(keyspace)
++            "{{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}".format(keyspace)
+         )
+         self.session.execute("CREATE TABLE IF NOT EXISTS {}.foo(k int PRIMARY KEY)".format(keyspace))
+         prepared = self.session.prepare("SELECT * FROM {}.foo WHERE k=?".format(keyspace))
+diff --git a/tests/integration/standard/test_query.py b/tests/integration/standard/test_query.py
+index 17598758..0899af6a 100644
+--- a/tests/integration/standard/test_query.py
++++ b/tests/integration/standard/test_query.py
+@@ -1357,12 +1357,12 @@ class BaseKeyspaceTests():
+         cls.table_name = "table_query_keyspace_tests"
+ 
+         ddl = """CREATE KEYSPACE {0} WITH replication =
+-                        {{'class': 'SimpleStrategy',
++                        {{'class': 'NetworkTopologyStrategy',
+                         'replication_factor': '{1}'}}""".format(cls.ks_name, 1)
+         cls.session.execute(ddl)
+ 
+         ddl = """CREATE KEYSPACE {0} WITH replication =
+-                                {{'class': 'SimpleStrategy',
++                                {{'class': 'NetworkTopologyStrategy',
+                                 'replication_factor': '{1}'}}""".format(cls.alternative_ks, 1)
+         cls.session.execute(ddl)
+ 
+diff --git a/tests/integration/standard/test_udts.py b/tests/integration/standard/test_udts.py
+index ae056d77..574d90ab 100644
+--- a/tests/integration/standard/test_udts.py
++++ b/tests/integration/standard/test_udts.py
+@@ -94,7 +94,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
+         # use the same UDT name in a different keyspace
+         s.execute("""
+             CREATE KEYSPACE udt_test_unprepared_registered2
+-            WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1' }
++            WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1' }
+             """)
+         s.set_keyspace("udt_test_unprepared_registered2")
+         s.execute("CREATE TYPE user (state text, is_cool boolean)")
+@@ -124,7 +124,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
+ 
+         s.execute("""
+             CREATE KEYSPACE udt_test_register_before_connecting
+-            WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1' }
++            WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1' }
+             """)
+         s.set_keyspace("udt_test_register_before_connecting")
+         s.execute("CREATE TYPE user (age int, name text)")
+@@ -132,7 +132,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
+ 
+         s.execute("""
+             CREATE KEYSPACE udt_test_register_before_connecting2
+-            WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1' }
++            WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1' }
+             """)
+         s.set_keyspace("udt_test_register_before_connecting2")
+         s.execute("CREATE TYPE user (state text, is_cool boolean)")
+@@ -196,7 +196,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
+         # use the same UDT name in a different keyspace
+         s.execute("""
+             CREATE KEYSPACE udt_test_prepared_unregistered2
+-            WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1' }
++            WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1' }
+             """)
+         s.set_keyspace("udt_test_prepared_unregistered2")
+         s.execute("CREATE TYPE user (state text, is_cool boolean)")
+@@ -243,7 +243,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
+         # use the same UDT name in a different keyspace
+         s.execute("""
+             CREATE KEYSPACE udt_test_prepared_registered2
+-            WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1' }
++            WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1' }
+             """)
+         s.set_keyspace("udt_test_prepared_registered2")
+         s.execute("CREATE TYPE user (state text, is_cool boolean)")
