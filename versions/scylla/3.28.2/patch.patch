@@ -1,9 +1,204 @@
+diff --git a/tests/integration/__init__.py b/tests/integration/__init__.py
+index 693ce407..0870137d 100644
+--- a/tests/integration/__init__.py
++++ b/tests/integration/__init__.py
+@@ -12,7 +12,9 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
++import re
+ import os
++from typing import Callable
+ from cassandra.cluster import Cluster
+ 
+ from tests import connection_class, EVENT_LOOP_MANAGER
+@@ -43,7 +45,6 @@ from cassandra import ProtocolVersion
+ 
+ try:
+     import ccmlib
+-    from ccmlib.dse_cluster import DseCluster
+     from ccmlib.cluster import Cluster as CCMCluster
+     from ccmlib.scylla_cluster import ScyllaCluster as CCMScyllaCluster
+     from ccmlib.cluster_factory import ClusterFactory as CCMClusterFactory
+@@ -87,7 +88,7 @@ def get_server_versions():
+ 
+     c = TestCluster()
+     s = c.connect()
+-    row = s.execute('SELECT cql_version, release_version FROM system.local').one()
++    row = s.execute("SELECT cql_version, release_version FROM system.local WHERE key='local'").one()
+ 
+     cass_version = _tuple_version(row.release_version)
+     cql_version = _tuple_version(row.cql_version)
+@@ -351,6 +352,13 @@ def local_decorator_creator():
+ 
+     return _id_and_mark
+ 
++def xfail_scylla_version(filter: Callable[[Version], bool], reason: str, *args, **kwargs):
++    if SCYLLA_VERSION is None:
++        return pytest.mark.skipif(False, reason="It is just a NoOP Decor, should not skip anything")
++    current_version = Version(get_scylla_version(SCYLLA_VERSION))
++
++    return pytest.mark.xfail(filter(current_version), reason=reason, *args, **kwargs)
++
+ local = local_decorator_creator()
+ notprotocolv1 = unittest.skipUnless(PROTOCOL_VERSION > 1, 'Protocol v1 not supported')
+ lessthenprotocolv4 = unittest.skipUnless(PROTOCOL_VERSION < 4, 'Protocol versions 4 or greater not supported')
+@@ -402,8 +410,7 @@ requiressimulacron = unittest.skipIf(SIMULACRON_JAR is None or CASSANDRA_VERSION
+ requirecassandra = unittest.skipIf(DSE_VERSION, "Cassandra required")
+ notdse = unittest.skipIf(DSE_VERSION, "DSE not supported")
+ requiredse = unittest.skipUnless(DSE_VERSION, "DSE required")
+-requirescloudproxy = unittest.skipIf(CLOUD_PROXY_PATH is None, "Cloud Proxy path hasn't been specified")
+-
++requirescompactstorage = xfail_scylla_version(lambda v: v >= Version('2025.1.0'), reason="ScyllaDB deprecated compact storage", raises=InvalidRequest)
+ libevtest = unittest.skipUnless(EVENT_LOOP_MANAGER=="libev", "Test timing designed for libev loop")
+ 
+ def wait_for_node_socket(node, timeout):
+@@ -791,17 +798,17 @@ def setup_keyspace(ipformat=None, wait=True, protocol_version=None, port=9042):
+ 
+         ddl = '''
+             CREATE KEYSPACE test3rf
+-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '3'}'''
++            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '3'}'''
+         execute_with_long_wait_retry(session, ddl)
+ 
+         ddl = '''
+             CREATE KEYSPACE test2rf
+-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '2'}'''
++            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '2'}'''
+         execute_with_long_wait_retry(session, ddl)
+ 
+         ddl = '''
+             CREATE KEYSPACE test1rf
+-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}'''
++            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}'''
+         execute_with_long_wait_retry(session, ddl)
+ 
+         ddl_3f = '''
+@@ -827,32 +834,24 @@ def is_scylla_enterprise(version: Version) -> bool:
+     return version > Version('2000.1.1')
+ 
+ 
+-def xfail_scylla_version_lt(reason, oss_scylla_version, ent_scylla_version, *args, **kwargs):
++def xfail_scylla_version_lt(reason, scylla_version, *args, **kwargs):
+     """
+     It is used to mark tests that are going to fail on certain scylla versions.
+     :param reason: message to fail test with
+-    :param oss_scylla_version: str, oss version from which test supposed to succeed
+-    :param ent_scylla_version: str, enterprise version from which test supposed to succeed. It should end with `.1.1`
++    :param scylla_version: str, version from which test supposed to succeed
+     """
+     if not reason.startswith("scylladb/scylladb#"):
+         raise ValueError('reason should start with scylladb/scylladb#<issue-id> to reference issue in scylla repo')
+ 
+-    if not isinstance(ent_scylla_version, str):
+-        raise ValueError('ent_scylla_version should be a str')
+-
+-    if not ent_scylla_version.endswith("1.1"):
+-        raise ValueError('ent_scylla_version should end with "1.1"')
++    if not isinstance(scylla_version, str):
++        raise ValueError('scylla_version should be a str')
+ 
+     if SCYLLA_VERSION is None:
+         return pytest.mark.skipif(False, reason="It is just a NoOP Decor, should not skip anything")
+ 
+     current_version = Version(get_scylla_version(SCYLLA_VERSION))
+ 
+-    if is_scylla_enterprise(current_version):
+-        return pytest.mark.xfail(current_version < Version(ent_scylla_version),
+-                                 reason=reason, *args, **kwargs)
+-
+-    return pytest.mark.xfail(current_version < Version(oss_scylla_version), reason=reason, *args, **kwargs)
++    return pytest.mark.xfail(current_version < Version(scylla_version), reason=reason, *args, **kwargs)
+ 
+ 
+ class UpDownWaiter(object):
+@@ -902,7 +901,7 @@ class BasicKeyspaceUnitTestCase(unittest.TestCase):
+ 
+     @classmethod
+     def create_keyspace(cls, rf):
+-        ddl = "CREATE KEYSPACE {0} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': '{1}'}}".format(cls.ks_name, rf)
++        ddl = "CREATE KEYSPACE {0} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': '{1}'}}".format(cls.ks_name, rf)
+         execute_with_long_wait_retry(cls.session, ddl)
+ 
+     @classmethod
+diff --git a/tests/integration/cqlengine/query/test_named.py b/tests/integration/cqlengine/query/test_named.py
+index 0d5ba382..dd8d176b 100644
+--- a/tests/integration/cqlengine/query/test_named.py
++++ b/tests/integration/cqlengine/query/test_named.py
+@@ -27,7 +27,8 @@ from tests.integration.cqlengine.base import BaseCassEngTestCase
+ from tests.integration.cqlengine.query.test_queryset import BaseQuerySetUsage
+ 
+ 
+-from tests.integration import BasicSharedKeyspaceUnitTestCase, greaterthanorequalcass30, requires_collection_indexes
++from tests.integration import BasicSharedKeyspaceUnitTestCase, greaterthanorequalcass30, requires_collection_indexes, xfail_scylla_version_lt
++import pytest
+ 
+ 
+ class TestQuerySetOperation(BaseCassEngTestCase):
+@@ -291,6 +292,8 @@ class TestNamedWithMV(BasicSharedKeyspaceUnitTestCase):
+         super(TestNamedWithMV, cls).tearDownClass()
+ 
+     @greaterthanorequalcass30
++    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Materialized views and secondary indexes are not supported on base tables with tablets.',
++                             scylla_version='2026.1')
+     @execute_count(5)
+     def test_named_table_with_mv(self):
+         """
+diff --git a/tests/integration/experiments/test_tablets.py b/tests/integration/experiments/test_tablets.py
+index 79dd1666..acbca106 100644
+--- a/tests/integration/experiments/test_tablets.py
++++ b/tests/integration/experiments/test_tablets.py
+@@ -11,9 +11,7 @@ from tests.unit.test_host_connection_pool import LOGGER
+ CCM_CLUSTER = None
+ 
+ def setup_module():
+-    global CCM_CLUSTER
+-
+-    CCM_CLUSTER = use_cluster('tablets', [3], start=True)
++    use_cluster('tablets', [3], start=True, set_keyspace=False)
+ 
+ 
+ class TestTabletsIntegration:
+diff --git a/tests/integration/standard/column_encryption/test_policies.py b/tests/integration/standard/column_encryption/test_policies.py
+index 8af27ab8..d8fb36b5 100644
+--- a/tests/integration/standard/column_encryption/test_policies.py
++++ b/tests/integration/standard/column_encryption/test_policies.py
+@@ -30,7 +30,7 @@ class ColumnEncryptionPolicyTest(unittest.TestCase):
+ 
+     def _recreate_keyspace(self, session):
+         session.execute("drop keyspace if exists foo")
+-        session.execute("CREATE KEYSPACE foo WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}")
++        session.execute("CREATE KEYSPACE foo WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}")
+         session.execute("CREATE TABLE foo.bar(encrypted blob, unencrypted int, primary key(unencrypted))")
+ 
+     def _create_policy(self, key, iv = None):
+diff --git a/tests/integration/standard/test_authentication.py b/tests/integration/standard/test_authentication.py
+index 94f77a69..08b51c1f 100644
+--- a/tests/integration/standard/test_authentication.py
++++ b/tests/integration/standard/test_authentication.py
+@@ -12,6 +12,8 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
++import os
++
+ from packaging.version import Version
+ import logging
+ import time
+@@ -33,6 +35,7 @@ log = logging.getLogger(__name__)
+ 
+ 
+ def setup_module():
++    os.environ['SCYLLA_EXT_OPTS'] = '--auth-superuser-name=cassandra --auth-superuser-salted-password=$6$x7IFjiX5VCpvNiFk$2IfjTvSyGL7zerpV.wbY7mJjaRCrJ/68dtT3UpT.sSmNYz1bPjtn3mH.kJKFvaZ2T4SbVeBijjmwGjcb83LlV/'
+     if CASSANDRA_IP.startswith("127.0.0.") and not USE_CASS_EXTERNAL:
+         use_singledc(start=False)
+         ccm_cluster = get_cluster()
 diff --git a/tests/integration/standard/test_cluster.py b/tests/integration/standard/test_cluster.py
-index a0354982..d7f89ad5 100644
+index a0354982..1abd82a0 100644
 --- a/tests/integration/standard/test_cluster.py
 +++ b/tests/integration/standard/test_cluster.py
 @@ -17,13 +17,14 @@ import unittest
-
+ 
  from collections import deque
  from copy import copy
 -from mock import Mock, call, patch
@@ -15,9 +210,686 @@ index a0354982..d7f89ad5 100644
  from packaging.version import Version
  import os
 +import pytest
-
+ 
  import cassandra
  from cassandra.cluster import NoHostAvailable, ExecutionProfile, EXEC_PROFILE_DEFAULT, ControlConnection, Cluster
+@@ -166,7 +167,7 @@ class ClusterTests(unittest.TestCase):
+         result = execute_until_pass(session,
+             """
+             CREATE KEYSPACE clustertests
+-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
++            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
+             """)
+         self.assertFalse(result)
+ 
+@@ -1175,27 +1176,35 @@ class ClusterTests(unittest.TestCase):
+         Then using HostFilterPolicy the replica is excluded from the considered hosts.
+         By checking the trace we verify that there are no more replicas.
+ 
++        Requires tablets feature disabled.
++
+         @since 3.5
+         @jira_ticket PYTHON-653
+         @expected_result the replicas are queried for HostFilterPolicy
+ 
+         @test_category metadata
+         """
++        ks_name = 'test_replicas_queried_ks'
+         queried_hosts = set()
+         tap_profile = ExecutionProfile(
+             load_balancing_policy=TokenAwarePolicy(RoundRobinPolicy())
+         )
+         with TestCluster(execution_profiles={EXEC_PROFILE_DEFAULT: tap_profile}) as cluster:
+             session = cluster.connect(wait_for_all_pools=True)
++            session.execute("DROP KEYSPACE IF EXISTS {}".format(ks_name))
++            session.execute(
++                "CREATE KEYSPACE {} WITH replication = {{'class': 'NetworkTopologyStrategy', "
++                "'replication_factor': '1'}} AND tablets = {{'enabled': false}}".format(ks_name)
++            )
+             session.execute('''
+-                    CREATE TABLE test1rf.table_with_big_key (
++                    CREATE TABLE {}.table_with_big_key (
+                         k1 int,
+                         k2 int,
+                         k3 int,
+                         k4 int,
+-                        PRIMARY KEY((k1, k2, k3), k4))''')
+-            prepared = session.prepare("""SELECT * from test1rf.table_with_big_key
+-                                          WHERE k1 = ? AND k2 = ? AND k3 = ? AND k4 = ?""")
++                        PRIMARY KEY((k1, k2, k3), k4))'''.format(ks_name))
++            prepared = session.prepare("""SELECT * from {}.table_with_big_key
++                                          WHERE k1 = ? AND k2 = ? AND k3 = ? AND k4 = ?""".format(ks_name))
+             for i in range(10):
+                 result = session.execute(prepared, (i, i, i, i), trace=True)
+                 trace = result.response_future.get_query_trace(query_cl=ConsistencyLevel.ALL)
+@@ -1214,14 +1223,14 @@ class ClusterTests(unittest.TestCase):
+                          execution_profiles={EXEC_PROFILE_DEFAULT: hfp_profile}) as cluster:
+ 
+             session = cluster.connect(wait_for_all_pools=True)
+-            prepared = session.prepare("""SELECT * from test1rf.table_with_big_key
+-                                          WHERE k1 = ? AND k2 = ? AND k3 = ? AND k4 = ?""")
++            prepared = session.prepare("""SELECT * from {}.table_with_big_key
++                                          WHERE k1 = ? AND k2 = ? AND k3 = ? AND k4 = ?""".format(ks_name))
+             for _ in range(10):
+                 result = session.execute(prepared, (last_i, last_i, last_i, last_i), trace=True)
+                 trace = result.response_future.get_query_trace(query_cl=ConsistencyLevel.ALL)
+                 self._assert_replica_queried(trace, only_replicas=False)
+ 
+-            session.execute('''DROP TABLE test1rf.table_with_big_key''')
++            session.execute('DROP KEYSPACE {}'.format(ks_name))
+ 
+     @greaterthanorequalcass30
+     @lessthanorequalcass40
+@@ -1490,7 +1499,7 @@ class DontPrepareOnIgnoredHostsTest(unittest.TestCase):
+         hosts = cluster.metadata.all_hosts()
+         session.execute("CREATE KEYSPACE clustertests "
+                         "WITH replication = "
+-                        "{'class': 'SimpleStrategy', 'replication_factor': '1'}")
++                        "{'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}")
+         session.execute("CREATE TABLE clustertests.tab (a text, PRIMARY KEY (a))")
+         # assign to an unused variable so cluster._prepared_statements retains
+         # reference
+diff --git a/tests/integration/standard/test_concurrent_schema_change_and_node_kill.py b/tests/integration/standard/test_concurrent_schema_change_and_node_kill.py
+index aeda381c..5ca2ac7f 100644
+--- a/tests/integration/standard/test_concurrent_schema_change_and_node_kill.py
++++ b/tests/integration/standard/test_concurrent_schema_change_and_node_kill.py
+@@ -27,7 +27,7 @@ class TestConcurrentSchemaChangeAndNodeKill(unittest.TestCase):
+             "DROP KEYSPACE IF EXISTS ks_deadlock;")
+         self.session.execute(
+             "CREATE KEYSPACE IF NOT EXISTS ks_deadlock "
+-            "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '2' };")
++            "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '2' };")
+         self.session.set_keyspace('ks_deadlock')
+         self.session.execute("CREATE TABLE IF NOT EXISTS some_table(k int, c int, v int, PRIMARY KEY (k, v));")
+         self.session.execute("INSERT INTO some_table (k, c, v) VALUES (1, 2, 3);")
+diff --git a/tests/integration/standard/test_connection.py b/tests/integration/standard/test_connection.py
+index 4d388ed2..de47eabb 100644
+--- a/tests/integration/standard/test_connection.py
++++ b/tests/integration/standard/test_connection.py
+@@ -15,7 +15,7 @@
+ import unittest
+ 
+ from functools import partial
+-from mock import patch
++from unittest.mock import patch
+ import logging
+ import sys
+ import threading
+diff --git a/tests/integration/standard/test_control_connection.py b/tests/integration/standard/test_control_connection.py
+index b6e0d3cc..5b73b479 100644
+--- a/tests/integration/standard/test_control_connection.py
++++ b/tests/integration/standard/test_control_connection.py
+@@ -64,7 +64,7 @@ class ControlConnectionTests(unittest.TestCase):
+         self.session = self.cluster.connect()
+         self.session.execute("""
+             CREATE KEYSPACE keyspacetodrop
+-            WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1' }
++            WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1' }
+             """)
+         self.session.set_keyspace("keyspacetodrop")
+         self.session.execute("CREATE TYPE user (age int, name text)")
+@@ -126,5 +126,5 @@ class ControlConnectionTests(unittest.TestCase):
+         self.assertEqual(3, len(hosts))
+ 
+         for host in hosts:
+-            self.assertEqual(9042, host.broadcast_rpc_port)
+-            self.assertEqual(7000, host.broadcast_port)
++            assert 9042 == host.broadcast_rpc_port
++            assert 7000 == host.broadcast_port
+diff --git a/tests/integration/standard/test_custom_protocol_handler.py b/tests/integration/standard/test_custom_protocol_handler.py
+index 9d9f90e6..e41d929d 100644
+--- a/tests/integration/standard/test_custom_protocol_handler.py
++++ b/tests/integration/standard/test_custom_protocol_handler.py
+@@ -27,7 +27,8 @@ from tests.integration.datatype_utils import update_datatypes, PRIMITIVE_DATATYP
+ from tests.integration.standard.utils import create_table_with_all_types, get_all_primitive_params
+ 
+ import uuid
+-import mock
++from unittest import mock
++import pytest
+ 
+ 
+ def setup_module():
+@@ -41,8 +42,9 @@ class CustomProtocolHandlerTest(unittest.TestCase):
+     def setUpClass(cls):
+         cls.cluster = TestCluster()
+         cls.session = cls.cluster.connect()
+-        cls.session.execute("CREATE KEYSPACE custserdes WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1'}")
++        cls.session.execute("CREATE KEYSPACE custserdes WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1'}")
+         cls.session.set_keyspace("custserdes")
++        cls.session.execute("CREATE TABLE IF NOT EXISTS custserdes.test (k int PRIMARY KEY, v int)")
+ 
+     @classmethod
+     def tearDownClass(cls):
+@@ -225,7 +227,7 @@ class CustomProtocolHandlerTest(unittest.TestCase):
+                                                         int_flag=False)
+ 
+     def _send_query_message(self, session, timeout, **kwargs):
+-        query = "SELECT * FROM test3rf.test"
++        query = "SELECT * FROM custserdes.test"
+         message = QueryMessage(query=query, **kwargs)
+         future = ResponseFuture(session, message, query=None, timeout=timeout)
+         future.send_request()
+@@ -235,8 +237,8 @@ class CustomProtocolHandlerTest(unittest.TestCase):
+         cluster = TestCluster(protocol_version=version, allow_beta_protocol_version=beta)
+         session = cluster.connect()
+ 
+-        query_one = SimpleStatement("INSERT INTO test3rf.test (k, v) VALUES (1, 1)")
+-        query_two = SimpleStatement("INSERT INTO test3rf.test (k, v) VALUES (2, 2)")
++        query_one = SimpleStatement("INSERT INTO custserdes.test (k, v) VALUES (1, 1)")
++        query_two = SimpleStatement("INSERT INTO custserdes.test (k, v) VALUES (2, 2)")
+ 
+         execute_with_long_wait_retry(session, query_one)
+         execute_with_long_wait_retry(session, query_two)
+@@ -250,7 +252,7 @@ class CustomProtocolHandlerTest(unittest.TestCase):
+             # This means the flag are not handled as they are meant by the server if uses_int=False
+             self.assertEqual(response.has_more_pages, uses_int_query_flag)
+ 
+-        execute_with_long_wait_retry(session, SimpleStatement("TRUNCATE test3rf.test"))
++        execute_with_long_wait_retry(session, SimpleStatement("TRUNCATE custserdes.test"))
+         cluster.shutdown()
+ 
+ 
+diff --git a/tests/integration/standard/test_cython_protocol_handlers.py b/tests/integration/standard/test_cython_protocol_handlers.py
+index 9e85edb9..89d037ee 100644
+--- a/tests/integration/standard/test_cython_protocol_handlers.py
++++ b/tests/integration/standard/test_cython_protocol_handlers.py
+@@ -34,7 +34,7 @@ class CythonProtocolHandlerTest(unittest.TestCase):
+         cls.cluster = TestCluster()
+         cls.session = cls.cluster.connect()
+         cls.session.execute("CREATE KEYSPACE testspace WITH replication = "
+-                            "{ 'class' : 'SimpleStrategy', 'replication_factor': '1'}")
++                            "{ 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1'}")
+         cls.session.set_keyspace("testspace")
+         cls.colnames = create_table_with_all_types("test_table", cls.session, cls.N_ITEMS)
+ 
+@@ -207,6 +207,120 @@ def verify_iterator_data(assertEqual, results):
+     return count
+ 
+ 
++class NumpyWideTableTest(unittest.TestCase):
++    """
++    Test NumpyProtocolHandler with wide tables (many columns).
++
++    ScyllaDB has a built-in 1MB page size limit that can cause fewer rows
++    per page than requested when working with wide tables.
++
++    See: https://github.com/scylladb/python-driver/issues/65
++    """
++
++    N_COLUMNS = 200  # Number of int columns (plus primary key columns)
++    N_ROWS = 100
++
++    @classmethod
++    def setUpClass(cls):
++        cls.cluster = TestCluster()
++        cls.session = cls.cluster.connect()
++        cls.session.execute("CREATE KEYSPACE IF NOT EXISTS test_wide_table WITH replication = "
++                            "{ 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1'}")
++        cls.session.set_keyspace("test_wide_table")
++
++        # Create a wide table with many int columns
++        columns = ["pk int", "ck int"]
++        columns += ["col{0} int".format(i) for i in range(cls.N_COLUMNS)]
++        cls.session.execute(
++            "CREATE TABLE wide_table ({0}, PRIMARY KEY (pk, ck))".format(", ".join(columns)),
++            timeout=120
++        )
++
++        # Insert test data
++        col_names = ["pk", "ck"] + ["col{0}".format(i) for i in range(cls.N_COLUMNS)]
++        placeholders = ", ".join(["%s"] * len(col_names))
++        insert_cql = "INSERT INTO wide_table ({0}) VALUES ({1})".format(
++            ", ".join(col_names), placeholders
++        )
++
++        for row_idx in range(cls.N_ROWS):
++            values = [0, row_idx] + [row_idx * 1000 + i for i in range(cls.N_COLUMNS)]
++            cls.session.execute(insert_cql, values, timeout=120)
++
++    @classmethod
++    def tearDownClass(cls):
++        drop_keyspace_shutdown_cluster("test_wide_table", cls.session, cls.cluster)
++
++    @notprotocolv1
++    @numpytest
++    def test_numpy_wide_table_paging(self):
++        """
++        Test that NumpyProtocolHandler works with wide tables.
++
++        With ScyllaDB's 1MB page size limit, wide tables may return fewer
++        rows per page than the fetch_size requests. This test verifies
++        that all data is still returned correctly across multiple pages.
++        """
++        cluster = TestCluster(
++            execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)}
++        )
++        session = cluster.connect(keyspace="test_wide_table")
++        session.client_protocol_handler = NumpyProtocolHandler
++        session.default_fetch_size = 1000  # Request many rows per page
++
++        results = session.execute("SELECT * FROM wide_table")
++
++        # Count total rows across all pages
++        total_rows = 0
++        page_count = 0
++        for page in results:
++            page_count += 1
++            # Get row count from first column array
++            arr = page.get('pk')
++            if arr is not None:
++                total_rows += len(arr)
++
++        # Verify all rows were returned
++        self.assertEqual(total_rows, self.N_ROWS,
++                         "Expected {0} rows total, got {1} across {2} pages".format(
++                             self.N_ROWS, total_rows, page_count))
++
++        cluster.shutdown()
++
++    @notprotocolv1
++    @numpytest
++    def test_numpy_wide_table_no_fetch_size(self):
++        """
++        Test that setting fetch_size=None allows ScyllaDB to control page sizes.
++
++        This is the recommended workaround for getting larger pages with wide tables.
++        """
++        cluster = TestCluster(
++            execution_profiles={EXEC_PROFILE_DEFAULT: ExecutionProfile(row_factory=tuple_factory)}
++        )
++        session = cluster.connect(keyspace="test_wide_table")
++        session.client_protocol_handler = NumpyProtocolHandler
++        session.default_fetch_size = None  # Let server control page sizes
++
++        results = session.execute("SELECT * FROM wide_table")
++
++        # Count total rows across all pages
++        total_rows = 0
++        page_count = 0
++        for page in results:
++            page_count += 1
++            arr = page.get('pk')
++            if arr is not None:
++                total_rows += len(arr)
++
++        # Verify all rows were returned
++        self.assertEqual(total_rows, self.N_ROWS,
++                         "Expected {0} rows total, got {1} across {2} pages".format(
++                             self.N_ROWS, total_rows, page_count))
++
++        cluster.shutdown()
++
++
+ class NumpyNullTest(BasicSharedKeyspaceUnitTestCase):
+ 
+     @classmethod
+diff --git a/tests/integration/standard/test_dse.py b/tests/integration/standard/test_dse.py
+index 7b96094b..0ce53561 100644
+--- a/tests/integration/standard/test_dse.py
++++ b/tests/integration/standard/test_dse.py
+@@ -62,7 +62,7 @@ class DseCCMClusterTest(unittest.TestCase):
+             session,
+             """
+             CREATE KEYSPACE clustertests
+-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
++            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
+             """)
+         self.assertFalse(result)
+ 
+diff --git a/tests/integration/standard/test_metadata.py b/tests/integration/standard/test_metadata.py
+index a1d4d405..1e7e52e0 100644
+--- a/tests/integration/standard/test_metadata.py
++++ b/tests/integration/standard/test_metadata.py
+@@ -20,8 +20,10 @@ import logging
+ import sys
+ import time
+ import os
++from typing import Optional
++
+ from packaging.version import Version
+-from mock import Mock, patch
++from unittest.mock import Mock, patch
+ import pytest
+ 
+ from cassandra import AlreadyExists, SignatureDescriptor, UserFunctionDescriptor, UserAggregateDescriptor
+@@ -39,10 +41,11 @@ from tests.integration import (get_cluster, use_singledc, PROTOCOL_VERSION, exec
+                                BasicExistingKeyspaceUnitTestCase, drop_keyspace_shutdown_cluster, CASSANDRA_VERSION,
+                                greaterthanorequaldse51, greaterthanorequalcass30, lessthancass30, local,
+                                get_supported_protocol_versions, greaterthancass20,
+-                               greaterthancass21, assert_startswith, greaterthanorequalcass40,
++                               greaterthancass21, greaterthanorequalcass40,
+                                greaterthanorequaldse67, lessthancass40,
+-                               TestCluster, DSE_VERSION, requires_java_udf, requires_composite_type,
+-                               requires_collection_indexes, SCYLLA_VERSION, xfail_scylla, xfail_scylla_version_lt)
++                               TestCluster, requires_java_udf, requires_composite_type,
++                               requires_collection_indexes, SCYLLA_VERSION, xfail_scylla, xfail_scylla_version_lt,
++                               requirescompactstorage)
+ 
+ from tests.util import wait_until
+ 
+@@ -225,10 +228,10 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
+         self.assertTrue(self.keyspace_name in meta.keyspaces)
+         ksmeta = meta.keyspaces[self.keyspace_name]
+ 
+-        self.assertEqual(ksmeta.name, self.keyspace_name)
+-        self.assertTrue(ksmeta.durable_writes)
+-        self.assertEqual(ksmeta.replication_strategy.name, 'SimpleStrategy')
+-        self.assertEqual(ksmeta.replication_strategy.replication_factor, 1)
++        assert ksmeta.name == self.keyspace_name
++        assert ksmeta.durable_writes
++        assert ksmeta.replication_strategy.name == 'NetworkTopologyStrategy'
++        assert ksmeta.replication_strategy.dc_replication_factors["dc1"] == 1
+ 
+         self.assertTrue(self.function_table_name in ksmeta.tables)
+         tablemeta = ksmeta.tables[self.function_table_name]
+@@ -428,6 +431,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
+         self.check_create_statement(tablemeta, create_statement)
+ 
+     @lessthancass40
++    @requirescompactstorage
+     def test_compact_storage(self):
+         create_statement = self.make_create_statement(["a"], [], ["b"])
+         create_statement += " WITH COMPACT STORAGE"
+@@ -437,6 +441,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
+         self.check_create_statement(tablemeta, create_statement)
+ 
+     @lessthancass40
++    @requirescompactstorage
+     def test_dense_compact_storage(self):
+         create_statement = self.make_create_statement(["a"], ["b"], ["c"])
+         create_statement += " WITH COMPACT STORAGE"
+@@ -445,6 +450,8 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
+         tablemeta = self.get_table_metadata()
+         self.check_create_statement(tablemeta, create_statement)
+ 
++    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Counters are not yet supported with tablets',
++                             scylla_version="2026.1")
+     def test_counter(self):
+         create_statement = (
+             "CREATE TABLE {keyspace}.{table} ("
+@@ -456,6 +463,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
+         self.check_create_statement(tablemeta, create_statement)
+ 
+     @lessthancass40
++    @requirescompactstorage
+     def test_counter_with_compact_storage(self):
+         """ PYTHON-1100 """
+         create_statement = (
+@@ -468,6 +476,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
+         self.check_create_statement(tablemeta, create_statement)
+ 
+     @lessthancass40
++    @requirescompactstorage
+     def test_counter_with_dense_compact_storage(self):
+         create_statement = (
+             "CREATE TABLE {keyspace}.{table} ("
+@@ -596,8 +605,8 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
+         self.assertNotIn("new_keyspace", cluster2.metadata.keyspaces)
+ 
+         # Cluster metadata modification
+-        self.session.execute("CREATE KEYSPACE new_keyspace WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}")
+-        self.assertNotIn("new_keyspace", cluster2.metadata.keyspaces)
++        self.session.execute("CREATE KEYSPACE new_keyspace WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}")
++        assert "new_keyspace" not in cluster2.metadata.keyspaces
+ 
+         cluster2.refresh_schema_metadata()
+         self.assertIn("new_keyspace", cluster2.metadata.keyspaces)
+@@ -717,6 +726,8 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
+         cluster2.shutdown()
+ 
+     @greaterthanorequalcass30
++    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
++                             scylla_version="2026.1")
+     def test_refresh_metadata_for_mv(self):
+         """
+         test for synchronously refreshing materialized view metadata
+@@ -926,6 +937,8 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
+ 
+     @greaterthanorequalcass30
+     @requires_collection_indexes
++    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
++                             scylla_version="2026.1")
+     def test_multiple_indices(self):
+         """
+         test multiple indices on the same column.
+@@ -959,6 +972,8 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
+         self.assertEqual(index_2.keyspace_name, "schemametadatatests")
+ 
+     @greaterthanorequalcass30
++    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
++                             scylla_version="2026.1")
+     def test_table_extensions(self):
+         s = self.session
+         ks = self.keyspace_name
+@@ -1072,7 +1087,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
+ 
+         for ks in keyspaces:
+             self.session.execute(
+-                f"CREATE KEYSPACE IF NOT EXISTS {ks} WITH REPLICATION = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 3 }}"
++                f"CREATE KEYSPACE IF NOT EXISTS {ks} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 3 }}"
+             )
+ 
+         self.cluster.schema_metadata_page_size = 2000
+@@ -1150,7 +1165,7 @@ class TestCodeCoverage(unittest.TestCase):
+ 
+         session.execute("""
+             CREATE KEYSPACE export_udts
+-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
++            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
+             AND durable_writes = true;
+         """)
+         session.execute("""
+@@ -1174,7 +1189,7 @@ class TestCodeCoverage(unittest.TestCase):
+             addresses map<text, frozen<address>>)
+         """)
+ 
+-        expected_prefix = """CREATE KEYSPACE export_udts WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}  AND durable_writes = true;
++        expected_prefix = """CREATE KEYSPACE export_udts WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}  AND durable_writes = true;
+ 
+ CREATE TYPE export_udts.street (
+     street_number int,
+@@ -1208,8 +1223,8 @@ CREATE TABLE export_udts.users (
+         cluster.shutdown()
+ 
+     @greaterthancass21
+-    @xfail_scylla_version_lt(reason='scylladb/scylladb#10707 - Column name in CREATE INDEX is not quoted',
+-                             oss_scylla_version="5.2", ent_scylla_version="2023.1.1")
++    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
++                             scylla_version="2026.1")
+     def test_case_sensitivity(self):
+         """
+         Test that names that need to be escaped in CREATE statements are
+@@ -1224,7 +1239,7 @@ CREATE TABLE export_udts.users (
+         session.execute("DROP KEYSPACE IF EXISTS {0}".format(ksname))
+         session.execute("""
+             CREATE KEYSPACE "%s"
+-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
++            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
+             """ % (ksname,))
+         session.execute("""
+             CREATE TABLE "%s"."%s" (
+@@ -1268,8 +1283,9 @@ CREATE TABLE export_udts.users (
+ 
+         ddl = '''
+             CREATE KEYSPACE %s
+-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '3'}'''
+-        self.assertRaises(AlreadyExists, session.execute, ddl % ksname)
++            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '3'}'''
++        with pytest.raises(AlreadyExists):
++            session.execute(ddl % ksname)
+ 
+         ddl = '''
+             CREATE TABLE %s.%s (
+@@ -1376,7 +1392,7 @@ class KeyspaceAlterMetadata(unittest.TestCase):
+         self.session = self.cluster.connect()
+         name = self._testMethodName.lower()
+         crt_ks = '''
+-                CREATE KEYSPACE %s WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1} AND durable_writes = true''' % name
++                CREATE KEYSPACE %s WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND durable_writes = true''' % name
+         self.session.execute(crt_ks)
+ 
+     def tearDown(self):
+@@ -1426,7 +1442,7 @@ class IndexMapTests(unittest.TestCase):
+             cls.session.execute(
+                 """
+                 CREATE KEYSPACE %s
+-                WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'};
++                WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'};
+                 """ % cls.keyspace_name)
+             cls.session.set_keyspace(cls.keyspace_name)
+         except Exception:
+@@ -1446,6 +1462,8 @@ class IndexMapTests(unittest.TestCase):
+     def drop_basic_table(self):
+         self.session.execute("DROP TABLE %s" % self.table_name)
+ 
++    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
++                             scylla_version="2026.1")
+     def test_index_updates(self):
+         self.create_basic_table()
+ 
+@@ -1487,6 +1505,8 @@ class IndexMapTests(unittest.TestCase):
+         self.assertNotIn('a_idx', ks_meta.indexes)
+         self.assertNotIn('b_idx', ks_meta.indexes)
+ 
++    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
++                             scylla_version="2026.1")
+     def test_index_follows_alter(self):
+         self.create_basic_table()
+ 
+@@ -1529,7 +1549,7 @@ class FunctionTest(unittest.TestCase):
+             cls.cluster = TestCluster()
+             cls.keyspace_name = cls.__name__.lower()
+             cls.session = cls.cluster.connect()
+-            cls.session.execute("CREATE KEYSPACE IF NOT EXISTS %s WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}" % cls.keyspace_name)
++            cls.session.execute("CREATE KEYSPACE IF NOT EXISTS %s WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}" % cls.keyspace_name)
+             cls.session.set_keyspace(cls.keyspace_name)
+             cls.keyspace_function_meta = cls.cluster.metadata.keyspaces[cls.keyspace_name].functions
+             cls.keyspace_aggregate_meta = cls.cluster.metadata.keyspaces[cls.keyspace_name].aggregates
+@@ -1997,7 +2017,7 @@ class BadMetaTest(unittest.TestCase):
+         cls.cluster = TestCluster()
+         cls.keyspace_name = cls.__name__.lower()
+         cls.session = cls.cluster.connect()
+-        cls.session.execute("CREATE KEYSPACE %s WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}" % cls.keyspace_name)
++        cls.session.execute("CREATE KEYSPACE %s WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}" % cls.keyspace_name)
+         cls.session.set_keyspace(cls.keyspace_name)
+         connection = cls.cluster.control_connection._connection
+ 
+@@ -2029,6 +2049,8 @@ class BadMetaTest(unittest.TestCase):
+             self.assertIs(m._exc_info[0], self.BadMetaException)
+             self.assertIn("/*\nWarning:", m.export_as_string())
+ 
++    @xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
++                             scylla_version="2026.1")
+     def test_bad_index(self):
+         self.session.execute('CREATE TABLE %s (k int PRIMARY KEY, v int)' % self.function_name)
+         self.session.execute('CREATE INDEX ON %s(v)' % self.function_name)
+@@ -2120,6 +2142,8 @@ class DynamicCompositeTypeTest(BasicSharedKeyspaceUnitTestCase):
+ 
+ 
+ @greaterthanorequalcass30
++@xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
++                         scylla_version="2026.1")
+ class MaterializedViewMetadataTestSimple(BasicSharedKeyspaceUnitTestCase):
+ 
+     def setUp(self):
+@@ -2171,7 +2195,7 @@ class MaterializedViewMetadataTestSimple(BasicSharedKeyspaceUnitTestCase):
+ 
+         @test_category metadata
+         """
+-        self.assertIn("SizeTieredCompactionStrategy", self.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views["mv1"].options["compaction"]["class"])
++        self.assertIn(self.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views["mv1"].options["compaction"]["class"], ["SizeTieredCompactionStrategy", "IncrementalCompactionStrategy"])
+ 
+         self.session.execute("ALTER MATERIALIZED VIEW {0}.mv1 WITH compaction = {{ 'class' : 'LeveledCompactionStrategy' }}".format(self.keyspace_name))
+         self.assertIn("LeveledCompactionStrategy", self.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views["mv1"].options["compaction"]["class"])
+@@ -2207,6 +2231,8 @@ class MaterializedViewMetadataTestSimple(BasicSharedKeyspaceUnitTestCase):
+ 
+ 
+ @greaterthanorequalcass30
++@xfail_scylla_version_lt(reason='scylladb/scylladb#22677 - Secondary indexes are not supported on base tables with tablets',
++                             scylla_version="2026.1")
+ class MaterializedViewMetadataTestComplex(BasicSegregatedKeyspaceUnitTestCase):
+     def test_create_view_metadata(self):
+         """
+diff --git a/tests/integration/standard/test_policies.py b/tests/integration/standard/test_policies.py
+index bbab35a0..34c4be97 100644
+--- a/tests/integration/standard/test_policies.py
++++ b/tests/integration/standard/test_policies.py
+@@ -105,5 +105,5 @@ class ExponentialRetryPolicyTests(unittest.TestCase):
+         self.session.execute(
+             """
+             CREATE KEYSPACE preparedtests
+-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
++            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
+             """)
+diff --git a/tests/integration/standard/test_prepared_statements.py b/tests/integration/standard/test_prepared_statements.py
+index 5ccc0732..19522208 100644
+--- a/tests/integration/standard/test_prepared_statements.py
++++ b/tests/integration/standard/test_prepared_statements.py
+@@ -43,7 +43,7 @@ class PreparedStatementTests(unittest.TestCase):
+         cls.cass_version = get_server_versions()
+ 
+     def setUp(self):
+-        self.cluster = TestCluster(metrics_enabled=True, allow_beta_protocol_version=True)
++        self.cluster = TestCluster(metrics_enabled=True, allow_beta_protocol_version=True, protocol_version=PROTOCOL_VERSION)
+         self.session = self.cluster.connect()
+ 
+     def tearDown(self):
+@@ -61,7 +61,7 @@ class PreparedStatementTests(unittest.TestCase):
+         self.session.execute(
+             """
+             CREATE KEYSPACE preparedtests
+-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '1'}
++            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
+             """)
+ 
+         self.session.set_keyspace("preparedtests")
+@@ -403,7 +403,7 @@ class PreparedStatementTests(unittest.TestCase):
+         keyspace = "test_fail_if_different_query_id_on_reprepare"
+         self.session.execute(
+             "CREATE KEYSPACE IF NOT EXISTS {} WITH replication = "
+-            "{{'class': 'SimpleStrategy', 'replication_factor': 1}}".format(keyspace)
++            "{{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}".format(keyspace)
+         )
+         self.session.execute("CREATE TABLE IF NOT EXISTS {}.foo(k int PRIMARY KEY)".format(keyspace))
+         prepared = self.session.prepare("SELECT * FROM {}.foo WHERE k=?".format(keyspace))
+diff --git a/tests/integration/standard/test_query.py b/tests/integration/standard/test_query.py
+index a2954db2..dcd04c05 100644
+--- a/tests/integration/standard/test_query.py
++++ b/tests/integration/standard/test_query.py
+@@ -26,7 +26,7 @@ from cassandra.cluster import NoHostAvailable, ExecutionProfile, EXEC_PROFILE_DE
+ from cassandra.policies import HostDistance, RoundRobinPolicy, WhiteListRoundRobinPolicy
+ from tests.integration import use_singledc, PROTOCOL_VERSION, BasicSharedKeyspaceUnitTestCase, \
+     greaterthanprotocolv3, MockLoggingHandler, get_supported_protocol_versions, local, get_cluster, setup_keyspace, \
+-    USE_CASS_EXTERNAL, greaterthanorequalcass40, DSE_VERSION, TestCluster, requirecassandra, xfail_scylla
++    USE_CASS_EXTERNAL, greaterthanorequalcass40, TestCluster, xfail_scylla,requirecassandra, xfail_scylla_version_lt
+ from tests import notwindows
+ from tests.integration import greaterthanorequalcass30, get_node
+ 
+@@ -34,7 +34,7 @@ import time
+ import random
+ import re
+ 
+-import mock
++from unittest import mock
+ 
+ 
+ log = logging.getLogger(__name__)
+diff --git a/tests/integration/standard/test_rate_limit_exceeded.py b/tests/integration/standard/test_rate_limit_exceeded.py
+index 280d6426..5df7ae81 100644
+--- a/tests/integration/standard/test_rate_limit_exceeded.py
++++ b/tests/integration/standard/test_rate_limit_exceeded.py
+@@ -31,8 +31,8 @@ class TestRateLimitExceededException(unittest.TestCase):
+         )
+         self.session.execute(
+             """
+-            CREATE KEYSPACE IF NOT EXISTS ratetests 
+-            WITH REPLICATION = {'class' : 'SimpleStrategy', 'replication_factor' : 1}
++            CREATE KEYSPACE IF NOT EXISTS ratetests
++            WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1}
+             """)
+ 
+         self.session.execute("USE ratetests")
 diff --git a/tests/integration/standard/test_scylla_cloud.py b/tests/integration/standard/test_scylla_cloud.py
 deleted file mode 100644
 index d1a22f88..00000000
@@ -117,269 +989,114 @@ index d1a22f88..00000000
 -                        assert len(cluster.metadata._host_id_by_endpoint) == 3
 -                finally:
 -                    cluster.shutdown()
-diff --git a/tests/integration/standard/test_metadata.py b/tests/integration/standard/test_metadata.py
-index a1d4d405..d3ccafd7 100644
---- a/tests/integration/standard/test_metadata.py
-+++ b/tests/integration/standard/test_metadata.py
-@@ -20,8 +20,10 @@ import logging
- import sys
- import time
- import os
-+from typing import Optional
+diff --git a/tests/integration/standard/test_shard_aware.py b/tests/integration/standard/test_shard_aware.py
+index cf8f17e2..b3ca3993 100644
+--- a/tests/integration/standard/test_shard_aware.py
++++ b/tests/integration/standard/test_shard_aware.py
+@@ -83,7 +83,7 @@ class TestShardAwareIntegration(unittest.TestCase):
+         self.session.execute(
+             """
+             CREATE KEYSPACE preparedtests
+-            WITH replication = {'class': 'SimpleStrategy', 'replication_factor': '3'}
++            WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '3'} AND tablets = {'enabled': false}
+             """)
+ 
+         self.session.execute("USE preparedtests")
+@@ -143,6 +143,8 @@ class TestShardAwareIntegration(unittest.TestCase):
+ 
+         using the traces to validate that all the action been executed on the the same shard.
+         this test is using prepared SELECT statements for this validation
 +
- from packaging.version import Version
--from mock import Mock, patch
-+from unittest.mock import Mock, patch
- import pytest
-
- from cassandra import AlreadyExists, SignatureDescriptor, UserFunctionDescriptor, UserAggregateDescriptor
-@@ -37,14 +39,15 @@ from cassandra.util import SortedSet
- from tests.integration import (get_cluster, use_singledc, PROTOCOL_VERSION, execute_until_pass,
-                                BasicSegregatedKeyspaceUnitTestCase, BasicSharedKeyspaceUnitTestCase,
-                                BasicExistingKeyspaceUnitTestCase, drop_keyspace_shutdown_cluster, CASSANDRA_VERSION,
--                               greaterthanorequaldse51, greaterthanorequalcass30, lessthancass30, local,
-+                               greaterthanorequaldse51, greaterthanorequalcass30, lessthancass30, local,
-                                get_supported_protocol_versions, greaterthancass20,
--                               greaterthancass21, assert_startswith, greaterthanorequalcass40,
--                               greaterthanorequaldse67, lessthancass40,
--                               TestCluster, DSE_VERSION, requires_java_udf, requires_composite_type,
--                               requires_collection_indexes, SCYLLA_VERSION, xfail_scylla, xfail_scylla_version_lt)
-+                               greaterthancass21, greaterthanorequalcass40,
-+                               greaterthanorequaldse67, lessthancass40,
-+                               TestCluster, requires_java_udf, requires_composite_type,
-+                               requires_collection_indexes, SCYLLA_VERSION, xfail_scylla, xfail_scylla_version_lt,
-+                               requirescompactstorage)
-
- from tests.util import wait_until
-
- log = logging.getLogger(__name__)
-
-@@ -428,6 +429,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
-         self.check_create_statement(tablemeta, create_statement)
-
-     @lessthancass40
-+    @requirescompactstorage
-     def test_compact_storage(self):
-         create_statement = self.make_create_statement(["a"], [], ["b"])
-         create_statement += " WITH COMPACT STORAGE"
-@@ -437,6 +439,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
-         self.check_create_statement(tablemeta, create_statement)
-
-     @lessthancass40
-+    @requirescompactstorage
-     def test_dense_compact_storage(self):
-         create_statement = self.make_create_statement(["a"], ["b"], ["c"])
-         create_statement += " WITH COMPACT STORAGE"
-@@ -456,6 +459,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
-         self.check_create_statement(tablemeta, create_statement)
-
-     @lessthancass40
-+    @requirescompactstorage
-     def test_counter_with_compact_storage(self):
-         """ PYTHON-1100 """
-         create_statement = (
-@@ -468,6 +472,7 @@ class SchemaMetadataTests(BasicSegregatedKeyspaceUnitTestCase):
-         self.check_create_statement(tablemeta, create_statement)
-
-     @lessthancass40
-+    @requirescompactstorage
-     def test_counter_with_dense_compact_storage(self):
-         create_statement = (
-             "CREATE TABLE {keyspace}.{table} ("
-@@ -2171,7 +2163,7 @@ class MaterializedViewMetadataTestSimple(BasicSharedKeyspaceUnitTestCase):
-
-         @test_category metadata
++        Requires tablets to be disabled to ensure shard consistency.
          """
--        self.assertIn("SizeTieredCompactionStrategy", self.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views["mv1"].options["compaction"]["class"])
-+        self.assertIn(self.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views["mv1"].options["compaction"]["class"], ["SizeTieredCompactionStrategy", "IncrementalCompactionStrategy"])
-
-         self.session.execute("ALTER MATERIALIZED VIEW {0}.mv1 WITH compaction = {{ 'class' : 'LeveledCompactionStrategy' }}".format(self.keyspace_name))
-         self.assertIn("LeveledCompactionStrategy", self.cluster.metadata.keyspaces[self.keyspace_name].tables[self.function_table_name].views["mv1"].options["compaction"]["class"])
-diff --git a/tests/integration/__init__.py b/tests/integration/__init__.py
-index 693ce407..edac685d 100644
---- a/tests/integration/__init__.py
-+++ b/tests/integration/__init__.py
-@@ -12,7 +12,9 @@
- # See the License for the specific language governing permissions and
- # limitations under the License.
-
-+import re
- import os
-+from typing import Callable
+ 
+         self.create_ks_and_cf()
+diff --git a/tests/integration/standard/test_udts.py b/tests/integration/standard/test_udts.py
+index 7188bf3e..9b20b1b7 100644
+--- a/tests/integration/standard/test_udts.py
++++ b/tests/integration/standard/test_udts.py
+@@ -93,7 +93,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
+         # use the same UDT name in a different keyspace
+         s.execute("""
+             CREATE KEYSPACE udt_test_unprepared_registered2
+-            WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1' }
++            WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1' }
+             """)
+         s.set_keyspace("udt_test_unprepared_registered2")
+         s.execute("CREATE TYPE user (state text, is_cool boolean)")
+@@ -123,14 +123,14 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
+ 
+         s.execute("""
+             CREATE KEYSPACE udt_test_register_before_connecting
+-            WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1' }
++            WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1' }
+             """)
+         s.execute("CREATE TYPE udt_test_register_before_connecting.user (age int, name text)")
+         s.execute("CREATE TABLE udt_test_register_before_connecting.mytable (a int PRIMARY KEY, b frozen<user>)")
+ 
+         s.execute("""
+             CREATE KEYSPACE udt_test_register_before_connecting2
+-            WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1' }
++            WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1' }
+             """)
+         s.execute("CREATE TYPE udt_test_register_before_connecting2.user (state text, is_cool boolean)")
+         s.execute("CREATE TABLE udt_test_register_before_connecting2.mytable (a int PRIMARY KEY, b frozen<user>)")
+@@ -192,7 +192,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
+         # use the same UDT name in a different keyspace
+         s.execute("""
+             CREATE KEYSPACE udt_test_prepared_unregistered2
+-            WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1' }
++            WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1' }
+             """)
+         s.set_keyspace("udt_test_prepared_unregistered2")
+         s.execute("CREATE TYPE user (state text, is_cool boolean)")
+@@ -239,7 +239,7 @@ class UDTTests(BasicSegregatedKeyspaceUnitTestCase):
+         # use the same UDT name in a different keyspace
+         s.execute("""
+             CREATE KEYSPACE udt_test_prepared_registered2
+-            WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor': '1' }
++            WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor': '1' }
+             """)
+         s.set_keyspace("udt_test_prepared_registered2")
+         s.execute("CREATE TYPE user (state text, is_cool boolean)")
+diff --git a/tests/integration/standard/test_use_keyspace.py b/tests/integration/standard/test_use_keyspace.py
+index 42cf03a5..3021bca2 100644
+--- a/tests/integration/standard/test_use_keyspace.py
++++ b/tests/integration/standard/test_use_keyspace.py
+@@ -7,7 +7,7 @@ try:
+ except ImportError:
+     import unittest  # noqa
+ 
+-from mock import patch
++from unittest.mock import patch
+ 
+ from cassandra.connection import Connection
  from cassandra.cluster import Cluster
-
- from tests import connection_class, EVENT_LOOP_MANAGER
-@@ -43,7 +45,6 @@ from cassandra import ProtocolVersion
-
- try:
-     import ccmlib
--    from ccmlib.dse_cluster import DseCluster
-     from ccmlib.cluster import Cluster as CCMCluster
-     from ccmlib.scylla_cluster import ScyllaCluster as CCMScyllaCluster
-     from ccmlib.cluster_factory import ClusterFactory as CCMClusterFactory
-@@ -87,7 +88,7 @@ def get_server_versions():
-
-     c = TestCluster()
-     s = c.connect()
--    row = s.execute('SELECT cql_version, release_version FROM system.local').one()
-+    row = s.execute("SELECT cql_version, release_version FROM system.local WHERE key='local'").one()
-
-     cass_version = _tuple_version(row.release_version)
-     cql_version = _tuple_version(row.cql_version)
-@@ -351,12 +259,19 @@ def local_decorator_creator():
-
-     return _id_and_mark
-
-+def xfail_scylla_version(filter: Callable[[Version], bool], reason: str, *args, **kwargs):
-+    if SCYLLA_VERSION is None:
-+        return pytest.mark.skipif(False, reason="It is just a NoOP Decor, should not skip anything")
-+    current_version = Version(get_scylla_version(SCYLLA_VERSION))
-+
-+    return pytest.mark.xfail(filter(current_version), reason=reason, *args, **kwargs)
-+
- local = local_decorator_creator()
- notprotocolv1 = unittest.skipUnless(PROTOCOL_VERSION > 1, 'Protocol v1 not supported')
- lessthenprotocolv4 = unittest.skipUnless(PROTOCOL_VERSION < 4, 'Protocol versions 4 or greater not supported')
- lessthanprotocolv3 = unittest.skipUnless(PROTOCOL_VERSION < 3, 'Protocol versions 3 or greater not supported')
- greaterthanprotocolv3 = unittest.skipUnless(PROTOCOL_VERSION >= 4, 'Protocol versions less than 4 are not supported')
- protocolv6 = unittest.skipUnless(6 in get_supported_protocol_versions(), 'Protocol versions less than 6 are not supported')
-
- greaterthancass20 = unittest.skipUnless(CASSANDRA_VERSION >= Version('2.1'), 'Cassandra version 2.1 or greater required')
- greaterthancass21 = unittest.skipUnless(CASSANDRA_VERSION >= Version('2.2'), 'Cassandra version 2.2 or greater required')
-@@ -399,11 +304,10 @@ pypy = unittest.skipUnless(platform.python_implementation() == "PyPy", "Test is
- requiresmallclockgranularity = unittest.skipIf("Windows" in platform.system() or "asyncore" in EVENT_LOOP_MANAGER,
-                                                "This test is not suitible for environments with large clock granularity")
- requiressimulacron = unittest.skipIf(SIMULACRON_JAR is None or CASSANDRA_VERSION < Version("2.1"), "Simulacron jar hasn't been specified or C* version is 2.0")
- requirecassandra = unittest.skipIf(DSE_VERSION, "Cassandra required")
- notdse = unittest.skipIf(DSE_VERSION, "DSE not supported")
--requiredse = unittest.skipUnless(DSE_VERSION, "DSE required")
-+requiredse = unittest.skipUnless(DSE_VERSION, "DSE required")
--requirescloudproxy = unittest.skipIf(CLOUD_PROXY_PATH is None, "Cloud Proxy path hasn't been specified")
--
-+requirescompactstorage = xfail_scylla_version(lambda v: v >= Version('2025.1.0'), reason="ScyllaDB deprecated compact storage", raises=InvalidRequest)
- libevtest = unittest.skipUnless(EVENT_LOOP_MANAGER=="libev", "Test timing designed for libev loop")
-
- def wait_for_node_socket(node, timeout):
-diff --git a/tests/integration/standard/test_custom_protocol_handler.py b/tests/integration/standard/test_custom_protocol_handler.py
-index 9d9f90e6..239f7e73 100644
---- a/tests/integration/standard/test_custom_protocol_handler.py
-+++ b/tests/integration/standard/test_custom_protocol_handler.py
-@@ -21,13 +21,14 @@ from cassandra.cluster import (ResponseFuture, ExecutionProfile, EXEC_PROFILE_DE
- from cassandra import ProtocolVersion, ConsistencyLevel
-
- from tests.integration import use_singledc, drop_keyspace_shutdown_cluster, \
--    greaterthanorequalcass30, execute_with_long_wait_retry, greaterthanorequaldse51, greaterthanorequalcass3_10, \
--    TestCluster, greaterthanorequalcass40, requirecassandra
-+    greaterthanorequalcass30, execute_with_long_wait_retry, greaterthanorequaldse51, greaterthanorequalcass3_10, \
-+    TestCluster, greaterthanorequalcass40, requirecassandra
- from tests.integration.datatype_utils import update_datatypes, PRIMITIVE_DATATYPES
- from tests.integration.standard.utils import create_table_with_all_types, get_all_primitive_params
-
- import uuid
--import mock
-+from unittest import mock
-+import pytest
-
-
- def setup_module():
+@@ -57,7 +57,7 @@ class TestUseKeyspace(unittest.TestCase):
+             return original_set_keyspace_blocking(*args, **kwargs)
+ 
+         with patch.object(Connection, "set_keyspace_blocking", patched_set_keyspace_blocking):
+-            self.session.execute("CREATE KEYSPACE test_set_keyspace WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}")
++            self.session.execute("CREATE KEYSPACE test_set_keyspace WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+             self.session.execute("CREATE TABLE test_set_keyspace.set_keyspace_slow_connection(pk int, PRIMARY KEY(pk))")
+ 
+             session2 = self.cluster.connect()
 diff --git a/tests/unit/cqlengine/test_connection.py b/tests/unit/cqlengine/test_connection.py
-index 56136b6e..9bce715f 100644
+index 56136b6e..662181a3 100644
 --- a/tests/unit/cqlengine/test_connection.py
 +++ b/tests/unit/cqlengine/test_connection.py
 @@ -13,12 +13,12 @@
  # limitations under the License.
-
+ 
  import unittest
 +from unittest.mock import Mock
-
+ 
  from cassandra.cluster import _ConfigMode
  from cassandra.cqlengine import connection
  from cassandra.query import dict_factory
 -
 -from mock import Mock
 +import pytest
-
-
+ 
+ 
  class ConnectionTest(unittest.TestCase):
-diff --git a/tests/integration/standard/test_query.py b/tests/integration/standard/test_query.py
-index a2954db2..a3bdf8a7 100644
---- a/tests/integration/standard/test_query.py
-+++ b/tests/integration/standard/test_query.py
-@@ -26,15 +26,15 @@ from cassandra.cluster import NoHostAvailable, ExecutionProfile, EXEC_PROFILE_DE
- from cassandra.policies import HostDistance, RoundRobinPolicy, WhiteListRoundRobinPolicy
- from tests.integration import use_singledc, PROTOCOL_VERSION, BasicSharedKeyspaceUnitTestCase, \
-     greaterthanprotocolv3, MockLoggingHandler, get_supported_protocol_versions, local, get_cluster, setup_keyspace, \
--    USE_CASS_EXTERNAL, greaterthanorequalcass40, DSE_VERSION, TestCluster, requirecassandra, xfail_scylla
-+    USE_CASS_EXTERNAL, greaterthanorequalcass40, TestCluster, xfail_scylla,requirecassandra
- from tests import notwindows
- from tests.integration import greaterthanorequalcass30, get_node
-
- import time
- import random
- import re
-
--import mock
-+from unittest import mock
-
-
- log = logging.getLogger(__name__)
-diff --git a/tests/integration/standard/test_use_keyspace.py b/tests/integration/standard/test_use_keyspace.py
-index 42cf03a5..72ddbf9e 100644
---- a/tests/integration/standard/test_use_keyspace.py
-+++ b/tests/integration/standard/test_use_keyspace.py
-@@ -7,7 +7,7 @@ try:
- except ImportError:
-     import unittest  # noqa
-
--from mock import patch
-+from unittest.mock import patch
-
- from cassandra.connection import Connection
- from cassandra.cluster import Cluster
-diff --git a/tests/integration/standard/test_connection.py b/tests/integration/standard/test_connection.py
-index 4d388ed2..630e5e6b 100644
---- a/tests/integration/standard/test_connection.py
-+++ b/tests/integration/standard/test_connection.py
-@@ -15,6 +15,6 @@
- import unittest
-
- from functools import partial
--from mock import patch
-+from unittest.mock import patch
- import logging
- import sys
-diff --git a/tests/integration/standard/test_prepared_statements.py b/tests/integration/standard/test_prepared_statements.py
-index 5ccc0732..3f63b881 100644
---- a/tests/integration/standard/test_prepared_statements.py
-+++ b/tests/integration/standard/test_prepared_statements.py
-@@ -43,7 +44,7 @@ class PreparedStatementTests(unittest.TestCase):
-         cls.cass_version = get_server_versions()
-
-     def setUp(self):
--        self.cluster = TestCluster(metrics_enabled=True, allow_beta_protocol_version=True)
-+        self.cluster = TestCluster(metrics_enabled=True, allow_beta_protocol_version=True, protocol_version=PROTOCOL_VERSION)
-         self.session = self.cluster.connect()
-
-     def tearDown(self):
-diff --git a/tests/integration/standard/test_authentication.py b/tests/integration/standard/test_authentication.py
-index eb8019bf..02089094 100644
---- a/tests/integration/standard/test_authentication.py
-+++ b/tests/integration/standard/test_authentication.py
-@@ -12,6 +12,8 @@
- # See the License for the specific language governing permissions and
- # limitations under the License.
-
-+import os
-+
- from packaging.version import Version
- import logging
- import time
-@@ -34,6 +36,7 @@ log = logging.getLogger(__name__)
-
-
- def setup_module():
-+    os.environ['SCYLLA_EXT_OPTS'] = '--auth-superuser-name=cassandra --auth-superuser-salted-password=$6$x7IFjiX5VCpvNiFk$2IfjTvSyGL7zerpV.wbY7mJjaRCrJ/68dtT3UpT.sSmNYz1bPjtn3mH.kJKFvaZ2T4SbVeBijjmwGjcb83LlV/'
-     if CASSANDRA_IP.startswith("127.0.0.") and not USE_CASS_EXTERNAL:
-         use_singledc(start=False)
-         ccm_cluster = get_cluster()
-
