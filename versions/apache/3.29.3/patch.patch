@@ -293,7 +293,7 @@ index 546141d8..a8cb9396 100644
      def setUpClass(cls):
          if not USE_CASS_EXTERNAL:
 diff --git a/tests/integration/standard/test_cluster.py b/tests/integration/standard/test_cluster.py
-index 4c286426..07f459c3 100644
+index 4c286426..132425e5 100644
 --- a/tests/integration/standard/test_cluster.py
 +++ b/tests/integration/standard/test_cluster.py
 @@ -163,7 +163,7 @@ class ClusterTests(unittest.TestCase):
@@ -305,7 +305,7 @@ index 4c286426..07f459c3 100644
              """)
          self.assertFalse(result)
  
-@@ -1150,6 +1150,7 @@ class ClusterTests(unittest.TestCase):
+@@ -1150,21 +1150,27 @@ class ClusterTests(unittest.TestCase):
  
          @test_category metadata
          """
@@ -313,9 +313,14 @@ index 4c286426..07f459c3 100644
          queried_hosts = set()
          tap_profile = ExecutionProfile(
              load_balancing_policy=TokenAwarePolicy(RoundRobinPolicy())
-@@ -1157,14 +1158,14 @@ class ClusterTests(unittest.TestCase):
+         )
          with TestCluster(execution_profiles={EXEC_PROFILE_DEFAULT: tap_profile}) as cluster:
              session = cluster.connect(wait_for_all_pools=True)
++            session.execute("DROP KEYSPACE IF EXISTS {}".format(ks_name))
++            session.execute(
++                "CREATE KEYSPACE {} WITH replication = {{'class': 'NetworkTopologyStrategy', "
++                "'replication_factor': '1'}} AND tablets = {{'enabled': false}}".format(ks_name)
++            )
              session.execute('''
 -                    CREATE TABLE test1rf.table_with_big_key (
 +                    CREATE TABLE {}.table_with_big_key (
@@ -332,7 +337,7 @@ index 4c286426..07f459c3 100644
              for i in range(10):
                  result = session.execute(prepared, (i, i, i, i), trace=True)
                  trace = result.response_future.get_query_trace(query_cl=ConsistencyLevel.ALL)
-@@ -1183,14 +1184,14 @@ class ClusterTests(unittest.TestCase):
+@@ -1183,14 +1189,14 @@ class ClusterTests(unittest.TestCase):
                           execution_profiles={EXEC_PROFILE_DEFAULT: hfp_profile}) as cluster:
  
              session = cluster.connect(wait_for_all_pools=True)
@@ -350,7 +355,7 @@ index 4c286426..07f459c3 100644
  
      @unittest.skip
      @greaterthanorequalcass30
-@@ -1459,7 +1460,7 @@ class DontPrepareOnIgnoredHostsTest(unittest.TestCase):
+@@ -1459,7 +1465,7 @@ class DontPrepareOnIgnoredHostsTest(unittest.TestCase):
          hosts = cluster.metadata.all_hosts()
          session.execute("CREATE KEYSPACE clustertests "
                          "WITH replication = "
